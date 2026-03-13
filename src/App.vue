@@ -6,7 +6,10 @@
         <p class="mt-2 text-sm text-slate-400">轻量级分布式任务调度系统 · FastAPI + Vue3</p>
 
         <div class="mt-6 grid grid-cols-1 gap-3 md:grid-cols-4">
-          <el-input v-model="form.command" placeholder="command: python job.py" class="md:col-span-2" />
+          <div class="space-y-1 md:col-span-2">
+            <p class="text-xs text-slate-400">Command</p>
+            <el-input v-model="form.command" placeholder="command: python job.py" />
+          </div>
           <div class="space-y-1">
             <p class="text-xs text-slate-400">CPU</p>
             <el-input-number v-model="form.cpu_required" :min="0.1" :step="0.1" :precision="1" class="w-full" />
@@ -19,6 +22,16 @@
 
         <div class="mt-4 flex gap-3">
           <el-button type="primary" @click="submitTask" :loading="submitting">提交任务</el-button>
+          <el-button
+            :type="simulatorRunning ? 'danger' : 'warning'"
+            @click="toggleSimulator"
+            :loading="simulatorLoading"
+          >
+            {{ simulatorRunning ? '停止9节点模拟' : '启动9节点模拟' }}
+          </el-button>
+          <el-tag :type="simulatorRunning ? 'success' : 'info'" effect="dark">
+            模拟器：{{ simulatorRunning ? 'RUNNING' : 'IDLE' }}
+          </el-tag>
           <el-tag v-if="lastTaskId" effect="dark" type="success">最近任务: {{ lastTaskId }}</el-tag>
         </div>
       </header>
@@ -78,6 +91,9 @@ const lastTaskId = ref('')
 const logVisible = ref(false)
 const tasks = ref<any[]>([])
 let tasksPollTimer: number | null = null
+const simulatorRunning = ref(false)
+const simulatorLoading = ref(false)
+let simulatorStatusTimer: number | null = null
 
 function statusTagType(status: string) {
   if (status === 'RUNNING') return 'warning'
@@ -97,6 +113,32 @@ async function fetchTasks() {
     tasks.value = data.tasks ?? []
   } catch {
     tasks.value = []
+  }
+}
+
+async function fetchSimulatorStatus() {
+  try {
+    const { data } = await axios.get('http://127.0.0.1:8000/api/simulator/status')
+    simulatorRunning.value = Boolean(data.running)
+  } catch {
+    simulatorRunning.value = false
+  }
+}
+
+async function toggleSimulator() {
+  simulatorLoading.value = true
+  try {
+    const url = simulatorRunning.value
+      ? 'http://127.0.0.1:8000/api/simulator/stop'
+      : 'http://127.0.0.1:8000/api/simulator/start'
+    const { data } = await axios.post(url)
+    simulatorRunning.value = Boolean(data.running)
+    ElMessage.success(data.message || '操作成功')
+    fetchTasks()
+  } catch {
+    ElMessage.error('模拟器控制失败，请检查后端状态')
+  } finally {
+    simulatorLoading.value = false
   }
 }
 
@@ -126,13 +168,19 @@ async function submitTask() {
 
 onMounted(() => {
   fetchTasks()
+  fetchSimulatorStatus()
   tasksPollTimer = window.setInterval(fetchTasks, 2000)
+  simulatorStatusTimer = window.setInterval(fetchSimulatorStatus, 3000)
 })
 
 onBeforeUnmount(() => {
   if (tasksPollTimer !== null) {
     clearInterval(tasksPollTimer)
     tasksPollTimer = null
+  }
+  if (simulatorStatusTimer !== null) {
+    clearInterval(simulatorStatusTimer)
+    simulatorStatusTimer = null
   }
 })
 </script>

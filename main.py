@@ -1,6 +1,9 @@
 import asyncio
+import subprocess
+import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -20,6 +23,7 @@ app.add_middleware(
 
 
 OFFLINE_TIMEOUT_SECONDS = 10
+TASK_AUTO_FINISH_SECONDS = 12
 
 
 class WorkerRegisterRequest(BaseModel):
@@ -58,10 +62,13 @@ class TaskState(BaseModel):
     status: Literal["PENDING", "RUNNING", "FAILED", "SUCCESS"]
     assigned_worker_id: Optional[str] = None
     created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
 
 
 cluster_nodes: Dict[str, WorkerState] = {}
 tasks_db: Dict[str, TaskState] = {}
+simulator_process: Optional[subprocess.Popen] = None
 
 
 def refresh_worker_statuses() -> None:
@@ -73,6 +80,26 @@ def refresh_worker_statuses() -> None:
             worker.status = "ONLINE"
 
 
+def release_task_resources(task: TaskState) -> None:
+    if not task.assigned_worker_id:
+        return
+
+    worker = cluster_nodes.get(task.assigned_worker_id)
+    if worker is None:
+        return
+
+    worker.used_cpu = max(0, worker.used_cpu - task.cpu_required)
+    worker.used_mem = max(0, worker.used_mem - task.mem_required)
+
+
+def mark_task_success(task: TaskState) -> None:
+    if task.status != "RUNNING":
+        return
+    task.status = "SUCCESS"
+    task.finished_at = time.time()
+    release_task_resources(task)
+
+
 @app.on_event("startup")
 async def startup_background_tasks() -> None:
     async def offline_sweeper() -> None:
@@ -80,7 +107,24 @@ async def startup_background_tasks() -> None:
             refresh_worker_statuses()
             await asyncio.sleep(1)
 
+    async def task_auto_finisher() -> None:
+        while True:
+            now = time.time()
+            for task in tasks_db.values():
+                if task.status == "RUNNING" and task.started_at and now - task.started_at >= TASK_AUTO_FINISH_SECONDS:
+                    mark_task_success(task)
+            await asyncio.sleep(1)
+
     asyncio.create_task(offline_sweeper())
+    asyncio.create_task(task_auto_finisher())
+
+
+@app.on_event("shutdown")
+async def shutdown_cleanup() -> None:
+    global simulator_process
+    if simulator_process and simulator_process.poll() is None:
+        simulator_process.terminate()
+        simulator_process = None
 
 
 @app.post("/api/workers/register")
@@ -182,6 +226,7 @@ async def create_task(payload: TaskCreateRequest):
 
     task.status = "RUNNING"
     task.assigned_worker_id = assigned_worker.id
+    task.started_at = time.time()
     tasks_db[task.id] = task
 
     return {
@@ -210,13 +255,7 @@ async def task_logs(task_id: str, websocket: WebSocket):
             await websocket.send_text(f"[{task_id}] log line {i:04d}: running {task.command}")
             await asyncio.sleep(0.01)
 
-        task.status = "SUCCESS"
-
-        if task.assigned_worker_id:
-            worker = cluster_nodes.get(task.assigned_worker_id)
-            if worker is not None:
-                worker.used_cpu = max(0, worker.used_cpu - task.cpu_required)
-                worker.used_mem = max(0, worker.used_mem - task.mem_required)
+        mark_task_success(task)
 
         await websocket.send_text(f"[{task_id}] SUCCESS")
         await websocket.close(code=1000)
@@ -235,6 +274,45 @@ async def get_task(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return {"task": task}
+
+
+@app.post("/api/simulator/start")
+async def start_cluster_simulator():
+    global simulator_process
+
+    if simulator_process and simulator_process.poll() is None:
+        return {"running": True, "pid": simulator_process.pid, "message": "simulator already running"}
+
+    script_path = Path(__file__).with_name("cluster_simulator.py")
+    if not script_path.exists():
+        raise HTTPException(status_code=500, detail="cluster_simulator.py not found")
+
+    simulator_process = subprocess.Popen(
+        [sys.executable, str(script_path), "--master", "http://127.0.0.1:8000"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {"running": True, "pid": simulator_process.pid, "message": "simulator started"}
+
+
+@app.post("/api/simulator/stop")
+async def stop_cluster_simulator():
+    global simulator_process
+
+    if simulator_process is None or simulator_process.poll() is not None:
+        simulator_process = None
+        return {"running": False, "message": "simulator not running"}
+
+    simulator_process.terminate()
+    simulator_process = None
+    return {"running": False, "message": "simulator stopped"}
+
+
+@app.get("/api/simulator/status")
+async def simulator_status():
+    running = simulator_process is not None and simulator_process.poll() is None
+    pid = simulator_process.pid if running and simulator_process else None
+    return {"running": running, "pid": pid}
 
 
 if __name__ == "__main__":
