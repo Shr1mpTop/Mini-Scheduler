@@ -7,8 +7,14 @@
 
         <div class="mt-6 grid grid-cols-1 gap-3 md:grid-cols-4">
           <el-input v-model="form.command" placeholder="command: python job.py" class="md:col-span-2" />
-          <el-input-number v-model="form.cpu_required" :min="0.1" :step="0.1" :precision="1" />
-          <el-input-number v-model="form.mem_required" :min="0.1" :step="0.1" :precision="1" />
+          <div class="space-y-1">
+            <p class="text-xs text-slate-400">CPU</p>
+            <el-input-number v-model="form.cpu_required" :min="0.1" :step="0.1" :precision="1" class="w-full" />
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-slate-400">Memory</p>
+            <el-input-number v-model="form.mem_required" :min="0.1" :step="0.1" :precision="1" class="w-full" />
+          </div>
         </div>
 
         <div class="mt-4 flex gap-3">
@@ -22,7 +28,6 @@
       <section class="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
         <div class="mb-3 flex items-center justify-between">
           <h2 class="text-lg font-semibold text-slate-100">任务列表</h2>
-          <el-tag type="info" effect="dark">每 2 秒自动刷新</el-tag>
         </div>
 
         <el-table :data="tasks" stripe class="w-full" height="320">

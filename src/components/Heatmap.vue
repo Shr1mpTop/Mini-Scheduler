@@ -2,7 +2,6 @@
   <section class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-xl font-semibold text-slate-100">Cluster Heatmap</h2>
-      <el-tag type="info" effect="dark">每 2 秒自动刷新</el-tag>
     </div>
 
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
