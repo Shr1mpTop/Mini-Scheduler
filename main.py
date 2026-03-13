@@ -55,7 +55,7 @@ class TaskState(BaseModel):
     command: str
     cpu_required: float
     mem_required: float
-    status: Literal["RUNNING", "FAILED", "SUCCESS"]
+    status: Literal["PENDING", "RUNNING", "FAILED", "SUCCESS"]
     assigned_worker_id: Optional[str] = None
     created_at: float
 
@@ -146,7 +146,7 @@ async def create_task(payload: TaskCreateRequest):
         command=payload.command,
         cpu_required=payload.cpu_required,
         mem_required=payload.mem_required,
-        status="FAILED",
+        status="PENDING",
         created_at=time.time(),
     )
 
@@ -211,6 +211,13 @@ async def task_logs(task_id: str, websocket: WebSocket):
             await asyncio.sleep(0.01)
 
         task.status = "SUCCESS"
+
+        if task.assigned_worker_id:
+            worker = cluster_nodes.get(task.assigned_worker_id)
+            if worker is not None:
+                worker.used_cpu = max(0, worker.used_cpu - task.cpu_required)
+                worker.used_mem = max(0, worker.used_mem - task.mem_required)
+
         await websocket.send_text(f"[{task_id}] SUCCESS")
         await websocket.close(code=1000)
     except WebSocketDisconnect:
@@ -220,6 +227,14 @@ async def task_logs(task_id: str, websocket: WebSocket):
 @app.get("/api/tasks")
 async def list_tasks():
     return {"tasks": list(tasks_db.values())}
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    task = tasks_db.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"task": task}
 
 
 if __name__ == "__main__":
